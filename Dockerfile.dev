@@ -1,19 +1,44 @@
 FROM ubuntu:24.04
 WORKDIR /spire
+
+# Install required packages
 RUN apt-get update && apt-get -y install \
-    curl unzip git build-essential ca-certificates libssl-dev sudo
+    curl unzip git build-essential ca-certificates libssl-dev sudo \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Go 1.25.0
 RUN curl -sSfL https://go.dev/dl/go1.25.0.linux-amd64.tar.gz | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Create user with same UID/GID as host (set via build args)
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-RUN groupadd -g ${GROUP_ID} developer && \
-    useradd -u ${USER_ID} -g ${GROUP_ID} -m -s /bin/bash developer && \
-    echo 'export PATH="/usr/local/go/bin:$PATH"' >> /home/developer/.bashrc && \
-    echo 'developer ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+# Add Go to root's environment (since make dev-shell runs as root)
+RUN echo 'export PATH="/usr/local/go/bin:$PATH"' >> /root/.bashrc
 
-USER developer
-WORKDIR /spire
+# Create script to handle dynamic user creation at runtime
+COPY <<'EOF' /entrypoint.sh
+#!/bin/bash
+# If HOST_UID is provided, create a user with matching permissions
+if [ ! -z "$HOST_UID" ] && [ ! -z "$HOST_GID" ]; then
+    # Create group if it doesn't exist
+    getent group $HOST_GID > /dev/null 2>&1 || groupadd -g $HOST_GID hostgroup
+    
+    # Create user if it doesn't exist  
+    getent passwd $HOST_UID > /dev/null 2>&1 || useradd -u $HOST_UID -g $HOST_GID -m -s /bin/bash -G sudo hostuser
+    
+    # Set up Go environment for the user
+    echo 'export PATH="/usr/local/go/bin:$PATH"' >> $(getent passwd $HOST_UID | cut -d: -f6)/.bashrc
+    
+    # Fix permissions on mounted code directory
+    if [ -d /spire/code ]; then
+        chown -R $HOST_UID:$HOST_GID /spire/code
+    fi
+    
+    # Switch to the host user
+    exec sudo -u "#$HOST_UID" "$@"
+fi
+
+# Default: run as root (maintains compatibility with existing make dev-shell)
+exec "$@"
+EOF
+
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
