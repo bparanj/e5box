@@ -1,0 +1,19 @@
+FROM ubuntu:24.04
+WORKDIR /spire
+RUN apt-get update && apt-get -y install \
+    curl unzip git build-essential ca-certificates libssl-dev sudo
+
+# Install Go 1.25.0
+RUN curl -sSfL https://go.dev/dl/go1.25.0.linux-amd64.tar.gz | tar xz -C /usr/local
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Create user with same UID/GID as host (set via build args)
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+RUN groupadd -g ${GROUP_ID} developer && \
+    useradd -u ${USER_ID} -g ${GROUP_ID} -m -s /bin/bash developer && \
+    echo 'export PATH="/usr/local/go/bin:$PATH"' >> /home/developer/.bashrc && \
+    echo 'developer ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+
+USER developer
+WORKDIR /spire
